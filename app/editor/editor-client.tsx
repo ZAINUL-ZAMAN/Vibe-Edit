@@ -387,17 +387,34 @@ export default function EditorClient({
         </div>
 
         <div className="bg-background flex flex-col">
-          <div className="flex-grow p-4 flex gap-3 min-h-[320px]">
-            <div className={`flex-grow bg-surface-container-lowest border border-outline-variant flex items-center justify-center ${previewAspectClass} max-h-full mx-auto`}>
-              <span className="text-outline text-sm">Rendered video preview</span>
+          {/* Preview + rulers (left = Y axis, bottom = X axis) */}
+          <div className="flex-grow p-4 flex flex-col min-h-[320px]">
+            <div className="flex-grow flex gap-2">
+              {/* Vertical ruler (Y axis) */}
+              <div className="w-10 flex flex-col justify-between py-1 shrink-0">
+                {Array.from({ length: 11 }).map((_, i) => (
+                  <div key={i} className="flex items-center gap-1">
+                    <span className="text-[9px] text-outline font-code-sm w-6 text-right">{(10 - i).toFixed(1)}</span>
+                    <div className="w-2 h-px bg-outline-variant" />
+                  </div>
+                ))}
+              </div>
+
+              <div className={`flex-grow bg-surface-container-lowest border border-outline-variant flex items-center justify-center ${previewAspectClass} max-h-full`}>
+                <span className="text-outline text-sm">Rendered video preview</span>
+              </div>
             </div>
-            <div className="w-10 flex flex-col justify-between py-1 shrink-0">
-              {Array.from({ length: 11 }).map((_, i) => (
-                <div key={i} className="flex items-center gap-1">
-                  <div className="w-2 h-px bg-outline-variant" />
-                  <span className="text-[9px] text-outline font-code-sm">{(10 - i).toFixed(1)}</span>
-                </div>
-              ))}
+
+            {/* Horizontal ruler (X axis) */}
+            <div className="flex mt-2 pl-12">
+              <div className="flex-grow flex justify-between">
+                {Array.from({ length: 11 }).map((_, i) => (
+                  <div key={i} className="flex flex-col items-center gap-1">
+                    <div className="w-px h-2 bg-outline-variant" />
+                    <span className="text-[9px] text-outline font-code-sm">{i.toFixed(1)}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
 
