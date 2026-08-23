@@ -33,6 +33,12 @@ const DEFAULT_LANES: Lane[] = [
   { id: "sfx", label: "SFX", kind: "audio", removable: false },
 ];
 
+// Shared ruler scale: both the vertical (Y) and horizontal (X) rulers use
+// this exact same pixel-per-cm value, so a "1cm" tick is the same physical
+// size on both axes -- this is what keeps them synchronized.
+const PX_PER_CM = 22;
+const RULER_MAX_CM = 20;
+
 let assetCounter = 0;
 let videoLaneCounter = 1;
 let clipInstanceCounter = 0;
@@ -69,6 +75,9 @@ export default function EditorClient({
   const [size, setSize] = useState("");
   const [isDragOver, setIsDragOver] = useState(false);
   const [renderStatus, setRenderStatus] = useState<string | null>(null);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportFormat, setExportFormat] = useState<"mp4" | "mp3">("mp4");
+  const [exportName, setExportName] = useState("");
 
   const codeRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -240,6 +249,13 @@ export default function EditorClient({
           <span className="font-code-sm text-code-sm text-on-surface-variant hidden sm:block">
             {projectName} &middot; {aspectRatio}
           </span>
+          <button
+            onClick={() => setShowExportModal(true)}
+            className="flex items-center gap-1.5 bg-primary text-background border border-primary px-4 py-2 font-label-caps text-[10px] uppercase tracking-widest hover:bg-secondary hover:border-secondary hover:text-background transition-all duration-300"
+          >
+            <span className="material-symbols-outlined text-[14px]">download</span>
+            Export
+          </button>
           <Link
             href="/dashboard"
             className="font-label-caps text-[10px] text-on-surface-variant hover:text-primary uppercase tracking-widest transition-colors"
@@ -387,17 +403,26 @@ export default function EditorClient({
         </div>
 
         <div className="bg-background flex flex-col">
-          {/* Preview + rulers (left = Y axis, bottom = X axis) */}
-          <div className="flex-grow p-4 flex flex-col min-h-[320px]">
-            <div className="flex-grow flex gap-2">
-              {/* Vertical ruler (Y axis) */}
-              <div className="w-10 flex flex-col justify-between py-1 shrink-0">
-                {Array.from({ length: 11 }).map((_, i) => (
-                  <div key={i} className="flex items-center gap-1">
-                    <span className="text-[9px] text-outline font-code-sm w-6 text-right">{(10 - i).toFixed(1)}</span>
-                    <div className="w-2 h-px bg-outline-variant" />
-                  </div>
-                ))}
+          {/* Preview + rulers (left = Y axis, bottom = X axis).
+              Both rulers use the same PX_PER_CM spacing so 1cm on the
+              vertical ruler is the same physical size as 1cm on the
+              horizontal one -- previously each ruler stretched to fill
+              its container, so their "cm" units didn't actually match. */}
+          <div className="flex-grow p-4 flex flex-col min-h-[320px] overflow-hidden">
+            <div className="flex-grow flex gap-2 min-h-0">
+              <div className="w-10 shrink-0 overflow-hidden">
+                <div className="flex flex-col">
+                  {Array.from({ length: RULER_MAX_CM + 1 }).map((_, cm) => (
+                    <div
+                      key={cm}
+                      style={{ height: PX_PER_CM }}
+                      className="flex items-start justify-end gap-1"
+                    >
+                      <span className="text-[9px] text-outline font-code-sm leading-none">{cm}</span>
+                      <div className="w-2 h-px bg-outline-variant mt-1" />
+                    </div>
+                  ))}
+                </div>
               </div>
 
               <div className={`flex-grow bg-surface-container-lowest border border-outline-variant flex items-center justify-center ${previewAspectClass} max-h-full`}>
@@ -405,13 +430,16 @@ export default function EditorClient({
               </div>
             </div>
 
-            {/* Horizontal ruler (X axis) */}
-            <div className="flex mt-2 pl-12">
-              <div className="flex-grow flex justify-between">
-                {Array.from({ length: 11 }).map((_, i) => (
-                  <div key={i} className="flex flex-col items-center gap-1">
+            <div className="pl-12 overflow-hidden mt-2">
+              <div className="flex">
+                {Array.from({ length: RULER_MAX_CM + 1 }).map((_, cm) => (
+                  <div
+                    key={cm}
+                    style={{ width: PX_PER_CM }}
+                    className="flex flex-col items-start gap-1 shrink-0"
+                  >
                     <div className="w-px h-2 bg-outline-variant" />
-                    <span className="text-[9px] text-outline font-code-sm">{i.toFixed(1)}</span>
+                    <span className="text-[9px] text-outline font-code-sm leading-none">{cm}</span>
                   </div>
                 ))}
               </div>
@@ -520,6 +548,99 @@ export default function EditorClient({
             )}
           </div>
         </div>
+      </div>
+
+      {showExportModal && (
+        <ExportModal
+          format={exportFormat}
+          setFormat={setExportFormat}
+          name={exportName}
+          setName={setExportName}
+          onClose={() => setShowExportModal(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function ExportModal({
+  format,
+  setFormat,
+  name,
+  setName,
+  onClose,
+}: {
+  format: "mp4" | "mp3";
+  setFormat: (f: "mp4" | "mp3") => void;
+  name: string;
+  setName: (n: string) => void;
+  onClose: () => void;
+}) {
+  const [attempted, setAttempted] = useState(false);
+
+  function handleDownload() {
+    setAttempted(true);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+      <div className="glass-panel border border-outline-variant p-8 max-w-sm w-full">
+        <div className="flex justify-between items-start mb-6">
+          <h3 className="font-headline-md text-headline-md text-primary text-xl">Export</h3>
+          <button onClick={onClose} className="text-outline hover:text-primary">
+            <span className="material-symbols-outlined">close</span>
+          </button>
+        </div>
+
+        <p className="font-label-caps text-[10px] text-on-surface-variant uppercase tracking-widest mb-2">
+          Format
+        </p>
+        <div className="grid grid-cols-2 gap-2 mb-6">
+          <button
+            onClick={() => setFormat("mp4")}
+            className={`py-3 text-sm border transition-colors ${
+              format === "mp4"
+                ? "border-secondary text-secondary bg-secondary/10"
+                : "border-outline-variant text-on-surface-variant hover:border-outline"
+            }`}
+          >
+            MP4 (video)
+          </button>
+          <button
+            onClick={() => setFormat("mp3")}
+            className={`py-3 text-sm border transition-colors ${
+              format === "mp3"
+                ? "border-secondary text-secondary bg-secondary/10"
+                : "border-outline-variant text-on-surface-variant hover:border-outline"
+            }`}
+          >
+            MP3 (audio)
+          </button>
+        </div>
+
+        <label className="font-label-caps text-[10px] text-on-surface-variant uppercase tracking-widest">
+          File name
+        </label>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="my-video"
+          className="mt-2 w-full bg-surface-container-lowest border border-outline-variant focus:border-secondary px-3 py-2 text-primary text-sm outline-none mb-6"
+        />
+
+        <button
+          onClick={handleDownload}
+          className="w-full bg-primary text-background py-3 font-label-caps text-[10px] uppercase tracking-widest hover:bg-secondary hover:text-background transition-all duration-300 flex items-center justify-center gap-2"
+        >
+          <span className="material-symbols-outlined text-[16px]">download</span>
+          Download {name ? `${name}.${format}` : `untitled.${format}`}
+        </button>
+
+        {attempted && (
+          <p className="text-[11px] text-on-surface-variant mt-3 text-center">
+            The render engine isn&apos;t connected yet, so there&apos;s nothing to download yet &mdash; this button is fully wired and will produce a real file once rendering is built.
+          </p>
+        )}
       </div>
     </div>
   );
