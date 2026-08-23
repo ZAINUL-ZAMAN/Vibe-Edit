@@ -107,16 +107,25 @@ export default function EditorClient({
 
   const codeRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { ref: verticalRulerRef, size: verticalRulerSize } = useElementSize<HTMLDivElement>();
-  const { ref: horizontalRulerRef, size: horizontalRulerSize } = useElementSize<HTMLDivElement>();
+  // Measure the PREVIEW box, not the rulers themselves -- the preview's
+  // size only depends on the aspect ratio and available space, never on
+  // how many ticks are drawn, so this can't create a feedback loop the
+  // way measuring the rulers' own (growing) content did.
+  const { ref: previewRef, size: previewSize } = useElementSize<HTMLDivElement>();
 
   const verticalTickCount = useMemo(
-    () => Math.max(RULER_MAX_CM, Math.floor(verticalRulerSize.height / PX_PER_CM)) + 1,
-    [verticalRulerSize.height]
+    () =>
+      previewSize.height > 0
+        ? Math.floor(previewSize.height / PX_PER_CM) + 1
+        : RULER_MAX_CM + 1,
+    [previewSize.height]
   );
   const horizontalTickCount = useMemo(
-    () => Math.max(RULER_MAX_CM, Math.floor(horizontalRulerSize.width / PX_PER_CM)) + 1,
-    [horizontalRulerSize.width]
+    () =>
+      previewSize.width > 0
+        ? Math.floor(previewSize.width / PX_PER_CM) + 1
+        : RULER_MAX_CM + 1,
+    [previewSize.width]
   );
 
   const addAssets = useCallback((files: FileList | File[]) => {
@@ -447,7 +456,10 @@ export default function EditorClient({
               its container, so their "cm" units didn't actually match. */}
           <div className="flex-grow p-4 flex flex-col min-h-[320px] overflow-hidden">
             <div className="flex-grow flex gap-2 min-h-0">
-              <div ref={verticalRulerRef} className="w-10 shrink-0 overflow-hidden">
+              <div
+                className="w-10 shrink-0 overflow-hidden"
+                style={{ height: previewSize.height || undefined }}
+              >
                 <div className="flex flex-col">
                   {Array.from({ length: verticalTickCount }).map((_, cm) => (
                     <div
@@ -462,12 +474,18 @@ export default function EditorClient({
                 </div>
               </div>
 
-              <div className={`flex-grow bg-surface-container-lowest border border-outline-variant flex items-center justify-center ${previewAspectClass} max-h-full`}>
+              <div
+                ref={previewRef}
+                className={`flex-grow bg-surface-container-lowest border border-outline-variant flex items-center justify-center ${previewAspectClass} max-h-full`}
+              >
                 <span className="text-outline text-sm">Rendered video preview</span>
               </div>
             </div>
 
-            <div ref={horizontalRulerRef} className="pl-12 overflow-hidden mt-2">
+            <div
+              className="pl-12 overflow-hidden mt-2"
+              style={{ width: previewSize.width ? previewSize.width + 48 : undefined }}
+            >
               <div className="flex">
                 {Array.from({ length: horizontalTickCount }).map((_, cm) => (
                   <div
