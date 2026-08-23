@@ -107,6 +107,22 @@ export default function EditorClient({
 
   const codeRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const assetsRef = useRef<Asset[]>([]);
+
+  useEffect(() => {
+    assetsRef.current = assets;
+  }, [assets]);
+
+  // Every uploaded file gets a browser object URL (for eventual playback/
+  // thumbnails). Those URLs hold onto memory until explicitly released --
+  // without this, a long editing session with many uploads would slowly
+  // leak memory. This releases them all when the editor unmounts.
+  useEffect(() => {
+    return () => {
+      assetsRef.current.forEach((asset) => URL.revokeObjectURL(asset.url));
+    };
+  }, []);
+
   // Measure the PREVIEW box, not the rulers themselves -- the preview's
   // size only depends on the aspect ratio and available space, never on
   // how many ticks are drawn, so this can't create a feedback loop the
@@ -282,7 +298,7 @@ export default function EditorClient({
   const previewAspectClass = aspectRatio === "9:16" ? "aspect-[9/16]" : "aspect-video";
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen flex flex-col" data-project-id={projectId ?? undefined}>
       <nav className="w-full sticky top-0 z-40 border-b border-outline-variant flex justify-between items-center px-4 md:px-6 py-3 glass-panel border-x-0 border-t-0">
         <Link href="/" className="flex items-center h-8 gap-2">
           <svg width="24" height="24" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
