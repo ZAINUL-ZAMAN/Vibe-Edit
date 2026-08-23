@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type AssetType = "video" | "audio";
 
@@ -37,7 +37,33 @@ const DEFAULT_LANES: Lane[] = [
 // this exact same pixel-per-cm value, so a "1cm" tick is the same physical
 // size on both axes -- this is what keeps them synchronized.
 const PX_PER_CM = 22;
-const RULER_MAX_CM = 20;
+const RULER_MAX_CM = 20; // fallback used only before the real size is measured
+
+// Measures an element's live pixel size so the rulers can figure out how
+// many 1cm ticks actually fit -- recalculates automatically on resize or
+// browser zoom, without ever changing how big a "1cm" tick itself is.
+function useElementSize<T extends HTMLElement>() {
+  const ref = useRef<T>(null);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) {
+        setSize({
+          width: entry.contentRect.width,
+          height: entry.contentRect.height,
+        });
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  return { ref, size };
+}
 
 let assetCounter = 0;
 let videoLaneCounter = 1;
@@ -81,6 +107,17 @@ export default function EditorClient({
 
   const codeRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const { ref: verticalRulerRef, size: verticalRulerSize } = useElementSize<HTMLDivElement>();
+  const { ref: horizontalRulerRef, size: horizontalRulerSize } = useElementSize<HTMLDivElement>();
+
+  const verticalTickCount = useMemo(
+    () => Math.max(RULER_MAX_CM, Math.floor(verticalRulerSize.height / PX_PER_CM)) + 1,
+    [verticalRulerSize.height]
+  );
+  const horizontalTickCount = useMemo(
+    () => Math.max(RULER_MAX_CM, Math.floor(horizontalRulerSize.width / PX_PER_CM)) + 1,
+    [horizontalRulerSize.width]
+  );
 
   const addAssets = useCallback((files: FileList | File[]) => {
     const newAssets: Asset[] = [];
@@ -410,9 +447,9 @@ export default function EditorClient({
               its container, so their "cm" units didn't actually match. */}
           <div className="flex-grow p-4 flex flex-col min-h-[320px] overflow-hidden">
             <div className="flex-grow flex gap-2 min-h-0">
-              <div className="w-10 shrink-0 overflow-hidden">
+              <div ref={verticalRulerRef} className="w-10 shrink-0 overflow-hidden">
                 <div className="flex flex-col">
-                  {Array.from({ length: RULER_MAX_CM + 1 }).map((_, cm) => (
+                  {Array.from({ length: verticalTickCount }).map((_, cm) => (
                     <div
                       key={cm}
                       style={{ height: PX_PER_CM }}
@@ -430,9 +467,9 @@ export default function EditorClient({
               </div>
             </div>
 
-            <div className="pl-12 overflow-hidden mt-2">
+            <div ref={horizontalRulerRef} className="pl-12 overflow-hidden mt-2">
               <div className="flex">
-                {Array.from({ length: RULER_MAX_CM + 1 }).map((_, cm) => (
+                {Array.from({ length: horizontalTickCount }).map((_, cm) => (
                   <div
                     key={cm}
                     style={{ width: PX_PER_CM }}
