@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { parseVibeSyntax } from "@/lib/vibe-syntax/parser";
+import { trimVideo } from "@/lib/render-engine/ffmpeg-engine";
 
 type AssetType = "video" | "audio";
 
@@ -100,7 +102,12 @@ export default function EditorClient({
   const [posY, setPosY] = useState("");
   const [size, setSize] = useState("");
   const [isDragOver, setIsDragOver] = useState(false);
-  const [renderStatus, setRenderStatus] = useState<string | null>(null);
+  const [renderState, setRenderState] = useState<{
+    status: "idle" | "loading" | "rendering" | "done" | "error";
+    message: string;
+  }>({ status: "idle", message: "" });
+  const [renderedBlob, setRenderedBlob] = useState<Blob | null>(null);
+  const [renderedUrl, setRenderedUrl] = useState<string | null>(null);
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportFormat, setExportFormat] = useState<"mp4" | "mp3">("mp4");
   const [exportName, setExportName] = useState("");
@@ -108,10 +115,15 @@ export default function EditorClient({
   const codeRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const assetsRef = useRef<Asset[]>([]);
+  const renderedUrlRef = useRef<string | null>(null);
 
   useEffect(() => {
     assetsRef.current = assets;
   }, [assets]);
+
+  useEffect(() => {
+    renderedUrlRef.current = renderedUrl;
+  }, [renderedUrl]);
 
   // Every uploaded file gets a browser object URL (for eventual playback/
   // thumbnails). Those URLs hold onto memory until explicitly released --
@@ -120,6 +132,7 @@ export default function EditorClient({
   useEffect(() => {
     return () => {
       assetsRef.current.forEach((asset) => URL.revokeObjectURL(asset.url));
+      if (renderedUrlRef.current) URL.revokeObjectURL(renderedUrlRef.current);
     };
   }, []);
 
@@ -285,15 +298,99 @@ export default function EditorClient({
     insertIntoCode(snippet);
   }
 
-  function handleRender() {
-    setRenderStatus("connecting-to-engine");
-  }
-
   const assetsById = useMemo(() => {
     const map = new Map<string, Asset>();
     assets.forEach((a) => map.set(a.id, a));
     return map;
   }, [assets]);
+
+  async function handleRender() {
+    const { calls, errors } = parseVibeSyntax(code);
+
+    if (errors.length > 0) {
+      setRenderState({
+        status: "error",
+        message: `Couldn't read the code: ${errors[0].message} (line ${errors[0].line})`,
+      });
+      return;
+    }
+
+    const trimCalls = calls.filter((c) => c.name === "trim");
+
+    if (trimCalls.length === 0) {
+      setRenderState({
+        status: "error",
+        message:
+          calls.length === 0
+            ? "No code found. Try: trim(clip: \"clip_01\", start: 0, end: 5)"
+            : `Found ${calls.map((c) => c.name).join(", ")}, but v1 only supports trim() so far -- cut() and merge() are next.`,
+      });
+      return;
+    }
+
+    // v1: run the first trim() call found. Chaining multiple operations
+    // together comes once cut() and merge() are wired up the same way.
+    const call = trimCalls[0];
+    const clipId = call.args.clip;
+    const start = call.args.start;
+    const end = call.args.end;
+
+    if (typeof clipId !== "string") {
+      setRenderState({ status: "error", message: 'trim() needs a clip id, e.g. clip: "clip_01"' });
+      return;
+    }
+    if (typeof start !== "number" || typeof end !== "number") {
+      setRenderState({ status: "error", message: "trim() needs numeric start and end values" });
+      return;
+    }
+
+    const asset = assetsById.get(clipId);
+    if (!asset) {
+      setRenderState({
+        status: "error",
+        message: `No uploaded asset has the id "${clipId}". Check the Assets panel for the correct id.`,
+      });
+      return;
+    }
+    if (asset.type !== "video") {
+      setRenderState({ status: "error", message: `"${clipId}" is an audio file -- trim() currently works on video.` });
+      return;
+    }
+    if (end <= start) {
+      setRenderState({ status: "error", message: "end must be after start." });
+      return;
+    }
+
+    try {
+      setRenderState({ status: "loading", message: "Loading render engine (first time only, ~25MB)..." });
+
+      const blob = await trimVideo(asset.file, start, end, (info) => {
+        if (info.phase === "loading-engine") {
+          setRenderState({ status: "loading", message: "Loading render engine (first time only, ~25MB)..." });
+        } else if (info.phase === "preparing-file") {
+          setRenderState({ status: "rendering", message: "Preparing your footage..." });
+        } else if (info.phase === "trimming" || info.phase === "encoding") {
+          const pct = info.ratio ? Math.min(100, Math.round(info.ratio * 100)) : null;
+          setRenderState({
+            status: "rendering",
+            message: pct !== null ? `Rendering... ${pct}%` : "Rendering...",
+          });
+        }
+      });
+
+      if (renderedUrl) URL.revokeObjectURL(renderedUrl);
+      const url = URL.createObjectURL(blob);
+      setRenderedBlob(blob);
+      setRenderedUrl(url);
+      setRenderState({ status: "done", message: "Render complete." });
+    } catch (err) {
+      console.error(err);
+      setRenderState({
+        status: "error",
+        message: err instanceof Error ? `Render failed: ${err.message}` : "Render failed for an unknown reason.",
+      });
+    }
+  }
 
   const previewAspectClass = aspectRatio === "9:16" ? "aspect-[9/16]" : "aspect-video";
 
@@ -492,9 +589,13 @@ export default function EditorClient({
 
               <div
                 ref={previewRef}
-                className={`flex-grow bg-surface-container-lowest border border-outline-variant flex items-center justify-center ${previewAspectClass} max-h-full`}
+                className={`flex-grow bg-surface-container-lowest border border-outline-variant flex items-center justify-center overflow-hidden ${previewAspectClass} max-h-full`}
               >
-                <span className="text-outline text-sm">Rendered video preview</span>
+                {renderedUrl ? (
+                  <video src={renderedUrl} controls className="w-full h-full object-contain bg-black" />
+                ) : (
+                  <span className="text-outline text-sm">Rendered video preview</span>
+                )}
               </div>
             </div>
 
@@ -608,13 +709,21 @@ export default function EditorClient({
           <div className="border-t border-outline-variant/30 p-4">
             <button
               onClick={handleRender}
-              className="w-full bg-primary text-background py-3 font-label-caps text-label-caps uppercase tracking-widest hover:bg-secondary hover:text-background transition-all duration-300"
+              disabled={renderState.status === "loading" || renderState.status === "rendering"}
+              className="w-full bg-primary text-background py-3 font-label-caps text-label-caps uppercase tracking-widest hover:bg-secondary hover:text-background transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Submit
+              {renderState.status === "loading" || renderState.status === "rendering"
+                ? "Rendering..."
+                : "Submit"}
             </button>
-            {renderStatus === "connecting-to-engine" && (
-              <p className="text-[11px] text-on-surface-variant mt-2 text-center">
-                The render engine (Remotion + ffmpeg.wasm) isn&apos;t wired up yet &mdash; this button is ready and will trigger a real render once that&apos;s built.
+            {renderState.status !== "idle" && (
+              <p
+                className={`text-[11px] mt-2 text-center ${
+                  renderState.status === "error" ? "text-error" : "text-on-surface-variant"
+                }`}
+                role={renderState.status === "error" ? "alert" : "status"}
+              >
+                {renderState.message}
               </p>
             )}
           </div>
@@ -627,6 +736,7 @@ export default function EditorClient({
           setFormat={setExportFormat}
           name={exportName}
           setName={setExportName}
+          renderedBlob={renderedBlob}
           onClose={() => setShowExportModal(false)}
         />
       )}
@@ -639,18 +749,30 @@ function ExportModal({
   setFormat,
   name,
   setName,
+  renderedBlob,
   onClose,
 }: {
   format: "mp4" | "mp3";
   setFormat: (f: "mp4" | "mp3") => void;
   name: string;
   setName: (n: string) => void;
+  renderedBlob: Blob | null;
   onClose: () => void;
 }) {
   const [attempted, setAttempted] = useState(false);
 
   function handleDownload() {
     setAttempted(true);
+    if (!renderedBlob || format !== "mp4") return; // v1: only real MP4 trim output exists so far
+
+    const url = URL.createObjectURL(renderedBlob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${name || "untitled"}.${format}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 
   return (
@@ -709,7 +831,11 @@ function ExportModal({
 
         {attempted && (
           <p className="text-[11px] text-on-surface-variant mt-3 text-center">
-            The render engine isn&apos;t connected yet, so there&apos;s nothing to download yet &mdash; this button is fully wired and will produce a real file once rendering is built.
+            {renderedBlob && format === "mp4"
+              ? "Downloaded."
+              : !renderedBlob
+              ? 'Nothing to download yet -- click "Submit" on the editor first to render your video.'
+              : "MP3 export isn't wired up yet -- v1 only renders MP4 video so far."}
           </p>
         )}
       </div>
