@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { parseVibeSyntax } from "@/lib/vibe-syntax/parser";
-import { trimVideo } from "@/lib/render-engine/ffmpeg-engine";
+import { parseVibeSyntax, type VibeCall } from "@/lib/vibe-syntax/parser";
+import { trimVideo, mergeVideos, cutVideoSegment } from "@/lib/render-engine/ffmpeg-engine";
 
 type AssetType = "video" | "audio";
 
@@ -304,6 +304,8 @@ export default function EditorClient({
     return map;
   }, [assets]);
 
+  const SUPPORTED_FUNCTIONS = ["trim", "merge", "cut"];
+
   async function handleRender() {
     const { calls, errors } = parseVibeSyntax(code);
 
@@ -315,25 +317,32 @@ export default function EditorClient({
       return;
     }
 
-    const trimCalls = calls.filter((c) => c.name === "trim");
+    const call = calls.find((c) => SUPPORTED_FUNCTIONS.includes(c.name));
 
-    if (trimCalls.length === 0) {
+    if (!call) {
       setRenderState({
         status: "error",
         message:
           calls.length === 0
-            ? "No code found. Try: trim(clip: \"clip_01\", start: 0, end: 5)"
-            : `Found ${calls.map((c) => c.name).join(", ")}, but v1 only supports trim() so far -- cut() and merge() are next.`,
+            ? 'No code found. Try: trim(clip: "clip_01", start: 0, end: 5)'
+            : `Found ${calls.map((c) => c.name).join(", ")}, but v1 only supports trim(), cut(), and merge() so far.`,
       });
       return;
     }
 
-    // v1: run the first trim() call found. Chaining multiple operations
-    // together comes once cut() and merge() are wired up the same way.
-    const call = trimCalls[0];
-    const clipId = call.args.clip;
-    const start = call.args.start;
-    const end = call.args.end;
+    if (call.name === "trim") {
+      await runTrim(call.args);
+    } else if (call.name === "merge") {
+      await runMerge(call.args);
+    } else if (call.name === "cut") {
+      await runCut(call.args);
+    }
+  }
+
+  async function runTrim(args: VibeCall["args"]) {
+    const clipId = args.clip;
+    const start = args.start;
+    const end = args.end;
 
     if (typeof clipId !== "string") {
       setRenderState({ status: "error", message: 'trim() needs a clip id, e.g. clip: "clip_01"' });
@@ -364,32 +373,141 @@ export default function EditorClient({
     try {
       setRenderState({ status: "loading", message: "Loading render engine (first time only, ~25MB)..." });
 
-      const blob = await trimVideo(asset.file, start, end, (info) => {
-        if (info.phase === "loading-engine") {
-          setRenderState({ status: "loading", message: "Loading render engine (first time only, ~25MB)..." });
-        } else if (info.phase === "preparing-file") {
-          setRenderState({ status: "rendering", message: "Preparing your footage..." });
-        } else if (info.phase === "trimming" || info.phase === "encoding") {
-          const pct = info.ratio ? Math.min(100, Math.round(info.ratio * 100)) : null;
-          setRenderState({
-            status: "rendering",
-            message: pct !== null ? `Rendering... ${pct}%` : "Rendering...",
-          });
-        }
-      });
+      const blob = await trimVideo(asset.file, start, end, handleProgress);
 
-      if (renderedUrl) URL.revokeObjectURL(renderedUrl);
-      const url = URL.createObjectURL(blob);
-      setRenderedBlob(blob);
-      setRenderedUrl(url);
-      setRenderState({ status: "done", message: "Render complete." });
+      applyRenderedOutput(blob, "Render complete.");
     } catch (err) {
-      console.error(err);
+      handleRenderError(err);
+    }
+  }
+
+  async function runCut(args: VibeCall["args"]) {
+    const clipId = args.clip;
+    const start = args.start;
+    const end = args.end;
+
+    if (typeof clipId !== "string") {
+      setRenderState({ status: "error", message: 'cut() needs a clip id, e.g. clip: "clip_01"' });
+      return;
+    }
+    if (typeof start !== "number" || typeof end !== "number") {
+      setRenderState({ status: "error", message: "cut() needs numeric start and end values" });
+      return;
+    }
+    if (start < 0) {
+      setRenderState({ status: "error", message: "start can't be negative." });
+      return;
+    }
+    if (end <= start) {
+      setRenderState({ status: "error", message: "end must be after start." });
+      return;
+    }
+
+    const asset = assetsById.get(clipId);
+    if (!asset) {
       setRenderState({
         status: "error",
-        message: err instanceof Error ? `Render failed: ${err.message}` : "Render failed for an unknown reason.",
+        message: `No uploaded asset has the id "${clipId}". Check the Assets panel for the correct id.`,
+      });
+      return;
+    }
+    if (asset.type !== "video") {
+      setRenderState({ status: "error", message: `"${clipId}" is an audio file -- cut() currently works on video.` });
+      return;
+    }
+
+    try {
+      setRenderState({ status: "loading", message: "Loading render engine (first time only, ~25MB)..." });
+
+      const { blob, audioIncluded } = await cutVideoSegment(asset.file, start, end, handleProgress);
+
+      applyRenderedOutput(
+        blob,
+        audioIncluded
+          ? "Render complete -- the section you cut has been removed."
+          : "Render complete -- the section was removed, but audio couldn't be preserved across the cut."
+      );
+    } catch (err) {
+      handleRenderError(err);
+    }
+  }
+
+  async function runMerge(args: VibeCall["args"]) {
+    const clipsValue = args.clips;
+
+    if (!Array.isArray(clipsValue) || clipsValue.length < 2) {
+      setRenderState({
+        status: "error",
+        message: 'merge() needs at least two clip ids, e.g. clips: ["clip_01", "clip_02"]',
+      });
+      return;
+    }
+
+    const clipIds = clipsValue.map(String);
+    const missingIds = clipIds.filter((id) => !assetsById.has(id));
+    if (missingIds.length > 0) {
+      setRenderState({
+        status: "error",
+        message: `No uploaded asset has the id "${missingIds[0]}". Check the Assets panel for the correct id.`,
+      });
+      return;
+    }
+
+    const nonVideoIds = clipIds.filter((id) => assetsById.get(id)?.type !== "video");
+    if (nonVideoIds.length > 0) {
+      setRenderState({
+        status: "error",
+        message: `"${nonVideoIds[0]}" is an audio file -- merge() currently works on video clips.`,
+      });
+      return;
+    }
+
+    const files = clipIds.map((id) => assetsById.get(id)!.file);
+
+    try {
+      setRenderState({ status: "loading", message: "Loading render engine (first time only, ~25MB)..." });
+
+      const { blob, audioIncluded } = await mergeVideos(files, handleProgress);
+
+      applyRenderedOutput(
+        blob,
+        audioIncluded
+          ? "Render complete."
+          : "Render complete -- one or more clips had no usable audio, so the merged video has no sound."
+      );
+    } catch (err) {
+      handleRenderError(err);
+    }
+  }
+
+  function handleProgress(info: { phase: string; ratio?: number }) {
+    if (info.phase === "loading-engine") {
+      setRenderState({ status: "loading", message: "Loading render engine (first time only, ~25MB)..." });
+    } else if (info.phase === "preparing-file") {
+      setRenderState({ status: "rendering", message: "Preparing your footage..." });
+    } else if (info.phase === "trimming" || info.phase === "encoding") {
+      const pct = info.ratio ? Math.min(100, Math.round(info.ratio * 100)) : null;
+      setRenderState({
+        status: "rendering",
+        message: pct !== null ? `Rendering... ${pct}%` : "Rendering...",
       });
     }
+  }
+
+  function applyRenderedOutput(blob: Blob, message: string) {
+    if (renderedUrl) URL.revokeObjectURL(renderedUrl);
+    const url = URL.createObjectURL(blob);
+    setRenderedBlob(blob);
+    setRenderedUrl(url);
+    setRenderState({ status: "done", message });
+  }
+
+  function handleRenderError(err: unknown) {
+    console.error(err);
+    setRenderState({
+      status: "error",
+      message: err instanceof Error ? `Render failed: ${err.message}` : "Render failed for an unknown reason.",
+    });
   }
 
   const previewAspectClass = aspectRatio === "9:16" ? "aspect-[9/16]" : "aspect-video";

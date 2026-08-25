@@ -9,7 +9,7 @@
 // Keeping these separate means adding a new function later (cut, merge,
 // addAudio, etc.) never requires touching the parser itself.
 
-export type VibeValue = string | number | number[];
+export type VibeValue = string | number | (string | number)[];
 
 export type VibeCall = {
   name: string;
@@ -58,13 +58,17 @@ function parseValue(raw: string): VibeValue {
     return trimmed.slice(1, -1);
   }
 
-  // Array: [3, 6]
+  // Array: [3, 6] or ["clip_01", "clip_02"] -- items can be numbers or
+  // quoted strings, since merge()'s clips list and overlay()'s time
+  // window both use this same array syntax.
   if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-    return trimmed
-      .slice(1, -1)
-      .split(",")
-      .map((n) => parseFloat(n.trim()))
-      .filter((n) => !Number.isNaN(n));
+    const inner = trimmed.slice(1, -1);
+    return splitTopLevel(inner).map((item) => {
+      const t = item.trim();
+      if (t.startsWith('"') && t.endsWith('"')) return t.slice(1, -1);
+      const n = parseFloat(t);
+      return Number.isNaN(n) ? t : n;
+    });
   }
 
   // Number with an optional unit suffix, e.g. "10cm" -> 10

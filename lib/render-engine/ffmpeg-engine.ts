@@ -51,6 +51,64 @@ function getExtension(filename: string): string {
 }
 
 /**
+ * Concatenates a list of already-written ffmpeg filesystem file names into
+ * one output file. Tries to keep audio from every segment first; if that
+ * fails (e.g. one segment has no audio track), automatically falls back to
+ * a video-only concat rather than failing outright, and reports which mode
+ * was actually used. Shared by both mergeVideos() and cutVideoSegment() so
+ * their concat behavior can never quietly drift apart from each other.
+ */
+async function concatSegments(
+  ffmpeg: FFmpeg,
+  segmentNames: string[],
+  outputName: string
+): Promise<{ audioIncluded: boolean }> {
+  const inputArgs = segmentNames.flatMap((name) => ["-i", name]);
+
+  async function runConcat(withAudio: boolean) {
+    const streamRefs = segmentNames
+      .map((_, i) => (withAudio ? `[${i}:v:0][${i}:a:0]` : `[${i}:v:0]`))
+      .join("");
+    const filter = `${streamRefs}concat=n=${segmentNames.length}:v=1:a=${
+      withAudio ? 1 : 0
+    }[outv]${withAudio ? "[outa]" : ""}`;
+    const mapArgs = withAudio
+      ? ["-map", "[outv]", "-map", "[outa]"]
+      : ["-map", "[outv]"];
+
+    await ffmpeg.exec([
+      ...inputArgs,
+      "-filter_complex",
+      filter,
+      ...mapArgs,
+      "-c:v",
+      "libx264",
+      ...(withAudio ? ["-c:a", "aac"] : []),
+      outputName,
+    ]);
+  }
+
+  try {
+    await runConcat(true);
+    return { audioIncluded: true };
+  } catch (err) {
+    console.warn("[ffmpeg] concat with audio failed, retrying video-only:", err);
+    await runConcat(false);
+    return { audioIncluded: false };
+  }
+}
+
+async function cleanupFiles(ffmpeg: FFmpeg, names: string[]) {
+  for (const name of names) {
+    try {
+      await ffmpeg.deleteFile(name);
+    } catch {
+      // Already gone or never existed -- fine to ignore.
+    }
+  }
+}
+
+/**
  * Trims a video file to the given start/end time (in seconds) and returns
  * the result as a real, playable MP4 Blob. Re-encodes rather than doing a
  * fast "stream copy" trim, because stream-copy trims can only cut on
@@ -87,11 +145,111 @@ export async function trimVideo(
   ]);
 
   const data = await ffmpeg.readFile(outputName);
-
-  // Clean up ffmpeg's in-memory filesystem so repeated renders don't
-  // accumulate leftover files.
-  await ffmpeg.deleteFile(inputName);
-  await ffmpeg.deleteFile(outputName);
+  await cleanupFiles(ffmpeg, [inputName, outputName]);
 
   return new Blob([data as BlobPart], { type: "video/mp4" });
+}
+
+/**
+ * Merges multiple video files into one, in the given order. Re-encodes
+ * (rather than a fast "stream copy" concat) because a stream-copy concat
+ * requires every clip to already share the exact same codec, resolution,
+ * and frame rate -- something we can't guarantee for user-uploaded footage.
+ */
+export async function mergeVideos(
+  files: File[],
+  onProgress?: ProgressCallback
+): Promise<{ blob: Blob; audioIncluded: boolean }> {
+  const ffmpeg = await getFFmpeg(onProgress);
+
+  const inputNames = files.map(
+    (file, i) => `merge_${i}${getExtension(file.name) || ".mp4"}`
+  );
+  const outputName = "merged_output.mp4";
+
+  onProgress?.({ phase: "preparing-file" });
+  for (let i = 0; i < files.length; i++) {
+    await ffmpeg.writeFile(inputNames[i], await fetchFile(files[i]));
+  }
+
+  onProgress?.({ phase: "trimming" }); // reuses the same "processing" phase label as trim
+  const { audioIncluded } = await concatSegments(ffmpeg, inputNames, outputName);
+
+  const data = await ffmpeg.readFile(outputName);
+  await cleanupFiles(ffmpeg, [...inputNames, outputName]);
+
+  return { blob: new Blob([data as BlobPart], { type: "video/mp4" }), audioIncluded };
+}
+
+/**
+ * Removes the [start, end] section from a video and stitches together
+ * whatever comes before and after it. If start is 0, there's nothing
+ * before the cut, so only the "after" segment is used (no concat needed).
+ * Re-encodes both segments for the same exact-cut-point reason trim() does.
+ */
+export async function cutVideoSegment(
+  file: File,
+  start: number,
+  end: number,
+  onProgress?: ProgressCallback
+): Promise<{ blob: Blob; audioIncluded: boolean }> {
+  const ffmpeg = await getFFmpeg(onProgress);
+
+  const ext = getExtension(file.name) || ".mp4";
+  const inputName = `cut_input${ext}`;
+  const beforeName = "cut_before.mp4";
+  const afterName = "cut_after.mp4";
+  const outputName = "cut_output.mp4";
+
+  onProgress?.({ phase: "preparing-file" });
+  await ffmpeg.writeFile(inputName, await fetchFile(file));
+
+  onProgress?.({ phase: "trimming" });
+
+  const hasBeforeSegment = start > 0;
+
+  if (hasBeforeSegment) {
+    await ffmpeg.exec([
+      "-i",
+      inputName,
+      "-ss",
+      "0",
+      "-to",
+      String(start),
+      "-c:v",
+      "libx264",
+      "-c:a",
+      "aac",
+      beforeName,
+    ]);
+  }
+
+  // No "-to" here on purpose -- this segment runs from `end` to the true
+  // end of the file, whatever that turns out to be.
+  await ffmpeg.exec([
+    "-i",
+    inputName,
+    "-ss",
+    String(end),
+    "-c:v",
+    "libx264",
+    "-c:a",
+    "aac",
+    afterName,
+  ]);
+
+  let result: { blob: Blob; audioIncluded: boolean };
+
+  if (!hasBeforeSegment) {
+    const data = await ffmpeg.readFile(afterName);
+    result = { blob: new Blob([data as BlobPart], { type: "video/mp4" }), audioIncluded: true };
+    await cleanupFiles(ffmpeg, [inputName, afterName]);
+  } else {
+    const { audioIncluded } = await concatSegments(ffmpeg, [beforeName, afterName], outputName);
+    const data = await ffmpeg.readFile(outputName);
+    result = { blob: new Blob([data as BlobPart], { type: "video/mp4" }), audioIncluded };
+    await cleanupFiles(ffmpeg, [inputName, beforeName, afterName, outputName]);
+  }
+
+  return result;
 }
