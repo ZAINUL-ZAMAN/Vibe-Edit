@@ -45,17 +45,29 @@ export default function DashboardClient({
   const [showSettings, setShowSettings] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
   function handleCreateProject(ratio: "16:9" | "9:16") {
-    startTransition(() => {
-      createProject(ratio);
+    setActionError(null);
+    startTransition(async () => {
+      // On success this redirects to the editor and never returns here;
+      // it only comes back with a value when something went wrong.
+      const result = await createProject(ratio);
+      if (result?.error) {
+        setActionError(`Couldn't create the project: ${result.error}`);
+        setShowNewProjectMenu(false);
+      }
     });
   }
 
   function handleDelete(projectId: string) {
+    setActionError(null);
     startTransition(async () => {
-      await deleteProject(projectId);
+      const result = await deleteProject(projectId);
+      if (result?.error) {
+        setActionError(`Couldn't delete the project: ${result.error}`);
+      }
       setConfirmDeleteId(null);
       setOpenMenuId(null);
     });
@@ -141,6 +153,15 @@ export default function DashboardClient({
         {fetchError && (
           <div className="border border-error/40 bg-error-container/10 text-error px-4 py-3 mb-6 text-sm">
             Couldn&apos;t load your projects: {fetchError}
+          </div>
+        )}
+
+        {actionError && (
+          <div
+            className="border border-error/40 bg-error-container/10 text-error px-4 py-3 mb-6 text-sm"
+            role="alert"
+          >
+            {actionError}
           </div>
         )}
 

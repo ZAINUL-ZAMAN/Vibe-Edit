@@ -38,9 +38,9 @@ const FEATURES = [
     body: "No install, no upload to a render farm. Your footage stays on your machine until you choose to export.",
   },
   {
-    icon: "straighten",
-    title: "Precise placement",
-    body: "A real ruler alongside your preview so position and size are exact measurements, not guesswork.",
+    icon: "content_cut",
+    title: "Exact cuts",
+    body: "Trim, cut and merge at the exact second you type. Every render is re-encoded, so cuts land precisely where you say.",
   },
 ];
 
@@ -58,7 +58,7 @@ const FAQS = [
   },
   {
     q: "Does my footage get uploaded to a server?",
-    a: "Rendering happens locally in your browser. Your footage stays on your device unless you choose to save a project to your account.",
+    a: "No. Rendering happens locally in your browser, so your footage stays on your device.",
   },
   {
     q: "What video formats are supported?",
@@ -113,7 +113,7 @@ export default function LandingPage() {
                   The Future of VFX<br />is <span className="text-secondary">Code.</span>
                 </h1>
                 <p className="font-body-md text-body-md text-on-surface-variant max-w-md text-lg leading-relaxed">
-                  Describe the edit you want to any AI assistant, paste the code it writes, drop in your footage, and render \u2014 entirely in your browser.
+                  Describe the edit you want to any AI assistant, paste the code it writes, drop in your footage, and render &mdash; entirely in your browser.
                 </p>
               </div>
               <div className="flex gap-4 flex-wrap">
@@ -149,7 +149,7 @@ export default function LandingPage() {
             <div className="relative grid grid-cols-1 md:grid-cols-2 gap-2 p-2 glass-panel border border-outline-variant h-[500px]">
               <div className="bg-surface-dim border border-outline-variant/50 p-4 font-code-sm text-code-sm overflow-hidden flex flex-col">
                 <div className="flex justify-between items-center mb-4 border-b border-outline-variant/30 pb-2">
-                  <span className="text-outline">overlay_node.vibe</span>
+                  <span className="text-outline">edit.vibe</span>
                   <div className="flex gap-1">
                     <div className="w-2 h-2 rounded-full bg-outline-variant" />
                     <div className="w-2 h-2 rounded-full bg-outline-variant" />
@@ -157,16 +157,17 @@ export default function LandingPage() {
                   </div>
                 </div>
                 <pre className="text-on-surface-variant overflow-x-auto whitespace-pre-wrap">
-                  <span className="text-secondary">trim</span>(clip: <span className="text-tertiary-container">&quot;intro_01&quot;</span>, start: <span className="text-tertiary-container">0</span>, end: <span className="text-tertiary-container">5</span>)
+                  <span className="text-outline">{"// keep the first five seconds"}</span>
+                  {"\n"}
+                  <span className="text-secondary">trim</span>(clip: <span className="text-tertiary-container">&quot;clip_01&quot;</span>, start: <span className="text-tertiary-container">0</span>, end: <span className="text-tertiary-container">5</span>)
                   {"\n\n"}
-                  <span className="text-secondary">overlay</span>(
-                  {"\n  "}clip: <span className="text-tertiary-container">&quot;logo_02&quot;</span>,
-                  {"\n  "}time: [<span className="text-tertiary-container">3</span>, <span className="text-tertiary-container">6</span>],
-                  {"\n  "}x: <span className="text-tertiary-container">10cm</span>, y: <span className="text-tertiary-container">4cm</span>,
-                  {"\n  "}size: <span className="text-tertiary-container">20cm</span>
-                  {"\n"})
+                  <span className="text-outline">{"// or remove a section"}</span>
+                  {"\n"}
+                  <span className="text-secondary">cut</span>(clip: <span className="text-tertiary-container">&quot;clip_01&quot;</span>, start: <span className="text-tertiary-container">2</span>, end: <span className="text-tertiary-container">4</span>)
                   {"\n\n"}
-                  <span className="text-secondary">render</span>()
+                  <span className="text-outline">{"// or join clips together"}</span>
+                  {"\n"}
+                  <span className="text-secondary">merge</span>(clips: [<span className="text-tertiary-container">&quot;clip_01&quot;</span>, <span className="text-tertiary-container">&quot;clip_02&quot;</span>])
                 </pre>
                 <div className="mt-auto border-t border-outline-variant/30 pt-2 flex justify-between items-center text-outline text-[10px]">
                   <span>UTF-8</span>

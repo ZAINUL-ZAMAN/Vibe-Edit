@@ -25,7 +25,14 @@ export default async function DashboardPage() {
     user.email?.split("@")[0] ||
     "there";
 
-  const hasPassword = user.app_metadata?.provider === "email" || false;
+  // "provider" only records how the account was first created, so someone who
+  // signed up with Google and later added a password would still look
+  // password-less. Check every provider linked to the account instead.
+  const linkedProviders = (user.app_metadata?.providers as string[] | undefined) ?? [];
+  const hasPassword =
+    user.app_metadata?.provider === "email" ||
+    linkedProviders.includes("email") ||
+    (user.identities ?? []).some((identity) => identity.provider === "email");
 
   return (
     <DashboardClient

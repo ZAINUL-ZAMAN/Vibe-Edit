@@ -3,7 +3,8 @@
 -- 1. Go to your Supabase project -> SQL Editor (left sidebar)
 -- 2. Click "New Query"
 -- 3. Paste this whole file in, click "Run"
--- You only need to do this once.
+-- It is safe to run more than once: anything that already exists is
+-- replaced or skipped instead of causing an error.
 
 -- Table: projects
 -- Stores each user's video projects (metadata only for now -- the actual
@@ -26,21 +27,25 @@ create index if not exists projects_user_id_idx on public.projects(user_id);
 alter table public.projects enable row level security;
 
 -- Policy: users can only SEE their own projects
+drop policy if exists "Users can view their own projects" on public.projects;
 create policy "Users can view their own projects"
   on public.projects for select
   using (auth.uid() = user_id);
 
 -- Policy: users can only CREATE projects owned by themselves
+drop policy if exists "Users can create their own projects" on public.projects;
 create policy "Users can create their own projects"
   on public.projects for insert
   with check (auth.uid() = user_id);
 
 -- Policy: users can only UPDATE their own projects
+drop policy if exists "Users can update their own projects" on public.projects;
 create policy "Users can update their own projects"
   on public.projects for update
   using (auth.uid() = user_id);
 
 -- Policy: users can only DELETE their own projects
+drop policy if exists "Users can delete their own projects" on public.projects;
 create policy "Users can delete their own projects"
   on public.projects for delete
   using (auth.uid() = user_id);

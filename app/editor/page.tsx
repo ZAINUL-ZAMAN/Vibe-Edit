@@ -26,12 +26,17 @@ export default async function EditorPage({
       .from("projects")
       .select("name, aspect_ratio")
       .eq("id", projectId)
-      .single();
+      .maybeSingle();
 
-    if (project) {
-      projectName = project.name;
-      aspectRatio = project.aspect_ratio as "16:9" | "9:16";
+    // A project id that doesn't exist (or belongs to someone else, which
+    // Row Level Security makes look the same) used to silently open a blank
+    // "Untitled Project". Send the person back to their dashboard instead.
+    if (!project) {
+      redirect("/dashboard");
     }
+
+    projectName = project.name;
+    aspectRatio = project.aspect_ratio as "16:9" | "9:16";
   }
 
   return (

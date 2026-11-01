@@ -1,7 +1,19 @@
 import Link from "next/link";
 import LoginForm from "./login-form";
 
-export default function LoginPage() {
+// Messages for the error codes the auth callback can send back in the URL.
+const ERROR_MESSAGES: Record<string, string> = {
+  auth_callback_failed: "Google sign-in didn't complete. Please try again.",
+};
+
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>;
+}) {
+  const { error } = await searchParams;
+  const initialError = error ? (ERROR_MESSAGES[error] ?? "Something went wrong signing you in. Please try again.") : null;
+
   return (
     <div className="min-h-screen flex flex-col">
       <nav className="w-full sticky top-0 z-50 border-b border-outline-variant flex justify-between items-center px-4 md:px-6 py-4 glass-panel border-x-0 border-t-0">
@@ -21,7 +33,7 @@ export default function LoginPage() {
       </nav>
 
       <main className="flex-grow flex items-center justify-center px-4 py-16">
-        <LoginForm />
+        <LoginForm initialError={initialError} />
       </main>
     </div>
   );
